@@ -40,4 +40,17 @@ Key | Type | Required | Default | Description
 `expand_network_hosts` | `bool` | `False` | `False` | If network specified in monitored conditions (ex. 192.168.88.0/24) also dinamicaly add all connected hosts inside the network.
 `monitored_conditions` | `list` | `True` | | Specify address (ex. 192.168.88.123) or networks (ex. 192.168.88.0/24) (or mixed!) to track network throughput. 
 
+Component is creating sensor per host/network specified. Every sensor has state Available or Unavailable and attributes contain actual traffic data.
+
+#### Host sensor
+States: On / Off 
+- depends on status value of lease on dhcp-server - matching string 'bound'
+- I would recommend using lower lease time in dhcp server so offline devices will switch to 'Off' more precisely.
+
+![hostsensor][hostsensorimg]
+
+#### Network sensor
+State: Number of currently active hosts in network
+![networksensor][networksensorimg]
+
 
