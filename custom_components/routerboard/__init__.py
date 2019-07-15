@@ -18,8 +18,8 @@ DATA_UPDATED = 'routerboard_data_updated'
 DATA_ROUTERBOARD = 'data_routerboard'
 
 DEFAULT_NAME = 'RouterBoard'
-DEFAULT_USERNAME = 'admin'
-DEFAULT_PASSWORD = ''
+DEFAULT_USERNAME = 'api_read'
+DEFAULT_PASSWORD = 'api_read'
 DEFAULT_PORT = 8728
 
 AVAILABLE_TRAFFIC_UNITS = ['b/s', 'B/s', 'Kb/s', 'KB/s', 'Mb/s', 'MB/s']
@@ -29,7 +29,7 @@ CONF_EXPAND_NETWORK_HOSTS = 'expand_network_hosts'
 
 DEFAULT_TRAFFIC_UNIT = 'Mb/s'
 
-DEFAULT_SCAN_INTERVAL = timedelta(seconds=15)
+DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
 
 CONFIG_SCHEMA = vol.Schema({
     DOMAIN: vol.Schema({
@@ -137,7 +137,7 @@ class RouterBoardData:
         self._take_accounting_snapshot()
 
     def _is_ip_accounting_enabled(self):
-        return self._api(cmd="/ip/accounting/print")[0].get('enabled') == 'yes'
+        return self._api(cmd="/ip/accounting/print")[0].get('enabled')
 
     def get_all_hosts_from_network(self, network):
         return [x for x in self._hosts.keys() if ipaddress.IPv4Address(x) in ipaddress.IPv4Network(network)]
