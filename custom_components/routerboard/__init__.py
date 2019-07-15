@@ -1,4 +1,4 @@
-"""Support for the RouterBoard client API."""
+"""RouterBoard client API."""
 from datetime import timedelta
 import logging
 
@@ -168,7 +168,6 @@ class RouterBoardData:
     def init_local_networks(self):
         dhcp_networks = self._api(cmd="/ip/dhcp-server/network/print")
         self._local_networks = [ipaddress.IPv4Network(network.get('address')) for network in dhcp_networks]
-        _LOGGER.info(f"Local networks initialized - {self._local_networks}")
 
     def update(self):
         """Get the latest data from Routerboard instance."""
