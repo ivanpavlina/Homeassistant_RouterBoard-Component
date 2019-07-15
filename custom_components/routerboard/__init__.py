@@ -86,7 +86,13 @@ def setup(hass, config):
         _LOGGER.error(f"Unknown exception occurred while connecting to RouterBoard API - {type(e)}/{e.args}")
         return False
 
-    rb_data = hass.data[DATA_ROUTERBOARD] = RouterBoardData(hass, api, traffic_unit)
+    try:
+        rb_data = hass.data[DATA_ROUTERBOARD] = RouterBoardData(hass, api, traffic_unit)
+    except LookupError:
+        _LOGGER.error("Accounting not active in RouterBoard, "
+                      "please enable it and restart HomeAssistant "
+                      "(https://wiki.mikrotik.com/wiki/Manual:IP/Accounting)")
+        return False
     rb_data.update()
 
     def refresh(event_time):
@@ -123,9 +129,15 @@ class RouterBoardData:
 
         self.available = True
 
+        if not self._is_ip_accounting_enabled():
+            raise LookupError
+
         self.init_local_networks()
         # Hit snapshot on init to clear previous accounting data
         self._take_accounting_snapshot()
+
+    def _is_ip_accounting_enabled(self):
+        return self._api(cmd="/ip/accounting/print")[0].get('enabled') == 'yes'
 
     def get_all_hosts_from_network(self, network):
         return [x for x in self._hosts.keys() if ipaddress.IPv4Address(x) in ipaddress.IPv4Network(network)]
@@ -183,8 +195,8 @@ class RouterBoardData:
                 bytes_count = int(str(traffic.get('bytes')).strip())
                 packets_count = int(str(traffic.get('packets')).strip())
 
-                # TODO u slucaju kad je traffic lokalni treba racunati i za sourca upload i destination download
-                # Sad se samo racuna od sourca promet sto nije 100% tocno... Al dobro, kad se stigne
+                # TODO If traffic is local both destination and source traffic should be counted.
+                #  ATM it's only counting data of source traffic, destination is ignored
                 if self._is_address_part_of_local_network(source_ip) and self._is_address_part_of_local_network(destination_ip):
                     traffic_type = 'local'
                     local_ip = str(source_ip)
