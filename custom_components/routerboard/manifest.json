@@ -1,0 +1,10 @@
+{
+  "domain": "routerboard",
+  "name": "RouterBoard",
+  "documentation": "",
+  "requirements": [
+    "librouteros==2.2.0"
+  ],
+  "dependencies": [],
+  "codeowners": []
+}
