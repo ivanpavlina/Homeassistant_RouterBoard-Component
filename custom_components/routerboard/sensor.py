@@ -1,5 +1,4 @@
-"""Support for monitoring the RouterBoardclient API."""
-from datetime import timedelta
+"""RouterBoard client API."""
 import logging
 
 from homeassistant.core import callback
@@ -44,7 +43,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
                 if expand_network_hosts:
                     valid_hosts = rb_api.get_all_hosts_from_network(condition)
-                    _LOGGER.info(f"Adding {len(valid_hosts)} hosts sensors due to requested network {condition} expansion")
+                    _LOGGER.debug(f"Adding {len(valid_hosts)} hosts sensors due to requested network {condition} expansion")
                     monitored_addresses.extend(rb_api.get_all_hosts_from_network(condition))
             else:
                 if rb_api.host_exists(condition):
@@ -56,7 +55,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
             _LOGGER.warning(f"Invalid address [{condition}] specified. "
                             f"IPv4 address (192.168.1.1) or IPv4 network (192.168.1.0/24) supported only")
 
-    _LOGGER.info(f"Monitoring {len(monitored_addresses)} addresses")
+    _LOGGER.info(f"Generating {len(monitored_addresses)} sensors")
     _LOGGER.debug(f">>>{monitored_addresses}")
 
     dev = []
