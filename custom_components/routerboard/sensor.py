@@ -1,26 +1,16 @@
 """RouterBoard client API."""
 import logging
-
-from homeassistant.core import callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import Entity
 import ipaddress
-from . import DATA_ROUTERBOARD, DATA_UPDATED
+
+from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.core import callback
+from homeassistant.components.sensor import ENTITY_ID_FORMAT
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import Entity, async_generate_entity_id
+
+from . import DATA_ROUTERBOARD, DATA_UPDATED, _is_address_a_network
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _is_address_a_network(address):
-    try:
-        ipaddress.IPv4Address(address)
-        return False
-    except ipaddress.AddressValueError:
-        try:
-            ipaddress.IPv4Network(address)
-            return True
-        except Exception:
-            raise
-
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up the RouterBoard sensors."""
@@ -28,10 +18,11 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         return
 
     rb_api = hass.data[DATA_ROUTERBOARD]
-    conditions = discovery_info['sensors']
+    conditions = discovery_info['conditions']
     client_name = discovery_info['client_name']
     expand_network_hosts = discovery_info['expand_network']
-
+    monitored_traffic = discovery_info['mon_traffic']
+    _LOGGER.debug(f'Monitored traffic: {monitored_traffic}')
     # Filter monitored conditions, generate all valid addresses if network is supplied. Also monitor network
     monitored_addresses = []
 
@@ -60,7 +51,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
     dev = []
     for host in monitored_addresses:
-        dev.append(RouterBoardAddressSensor(rb_api, client_name, host))
+        for traffic in monitored_traffic:
+            dev.append(RouterBoardAddressSensor(hass, rb_api, client_name, host, traffic))
 
     async_add_entities(dev, True)
 
@@ -68,12 +60,20 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 class RouterBoardAddressSensor(Entity):
     """Base for a RouterBoard address sensor."""
 
-    def __init__(self, rb_api, client_name, address):
+    def __init__(self, hass, rb_api, client_name, address, sensor_type):
         """Initialize base sensor."""
         self._rb_api = rb_api
         self._client_name = client_name
         self._address = address
         self._state = None
+        self._sensor_type = sensor_type # Active, Download, Upload, Local, WAN(Download+Local)
+
+        is_network =  _is_address_a_network(self._address)
+        name_type = {'net' if is_network else 'host'}
+        name_suffix = ('active_hosts' if is_network else 'activity') if self._sensor_type == 'active' else self._sensor_type
+        entity_name = f'{self._client_name}_{name_type}_{self._address}_{name_suffix}'
+
+        self.entity_id = async_generate_entity_id(ENTITY_ID_FORMAT, entity_name, hass=hass)
 
     async def async_added_to_hass(self):
         """Handle entity which will be added."""
@@ -88,44 +88,10 @@ class RouterBoardAddressSensor(Entity):
     def name(self):
         """Return the name of the sensor."""
         if _is_address_a_network(self._address):
-            return f'{self._client_name}_network_{self._address}'
+            return f'Network {self._address} {self._sensor_type.capitalize()}'
         else:
-            return f'{self._client_name}_host_{self._address}'
-
-    @property
-    def device_state_attributes(self):
-        if _is_address_a_network(self._address):
-            response = {'name': f'{self._address} network',
-                        'download_traffic': self._rb_api.get_network_traffic_value(self._address, 'download'),
-                        'download_packets': self._rb_api.get_network_packet_value(self._address, 'download'),
-                        'upload_traffic': self._rb_api.get_network_traffic_value(self._address, 'upload'),
-                        'upload_packets': self._rb_api.get_network_packet_value(self._address, 'upload'),
-
-                        'local_traffic_with_unit': f"{self._rb_api.get_network_traffic_value(self._address, 'local')} {self._rb_api.traffic_unit}",
-                        'local_packets_with_unit': f"{self._rb_api.get_network_packet_value(self._address, 'local')} P/s",
-                        'download_traffic_with_unit': f"{self._rb_api.get_network_traffic_value(self._address, 'download')} {self._rb_api.traffic_unit}",
-                        'download_packets_with_unit': f"{self._rb_api.get_network_packet_value(self._address, 'download')} P/s",
-                        'upload_traffic_with_unit': f"{self._rb_api.get_network_traffic_value(self._address, 'upload')} {self._rb_api.traffic_unit}",
-                        'upload_packets_with_unit': f"{self._rb_api.get_network_packet_value(self._address, 'upload')} P/s"}
-        else:
-            response = {'mac_address': self._rb_api.get_address_mac(self._address),
-                        'pretty_name': self._rb_api.get_address_name(self._address),
-                        'active': self._rb_api.get_address_active_state(self._address),
-                        'local_traffic': self._rb_api.get_address_traffic_value(self._address, 'local'),
-                        'local_packets': self._rb_api.get_address_packet_value(self._address, 'local'),
-                        'download_traffic': self._rb_api.get_address_traffic_value(self._address, 'download'),
-                        'download_packets': self._rb_api.get_address_packet_value(self._address, 'download'),
-                        'upload_traffic': self._rb_api.get_address_traffic_value(self._address, 'upload'),
-                        'upload_packets': self._rb_api.get_address_packet_value(self._address, 'upload'),
-
-                        'local_traffic_with_unit': f"{self._rb_api.get_address_traffic_value(self._address, 'local')} {self._rb_api.traffic_unit}",
-                        'local_packets_with_unit': f"{self._rb_api.get_address_packet_value(self._address, 'local')} P/s",
-                        'download_traffic_with_unit': f"{self._rb_api.get_address_traffic_value(self._address, 'download')} {self._rb_api.traffic_unit}",
-                        'download_packets_with_unit': f"{self._rb_api.get_address_packet_value(self._address, 'download')} P/s",
-                        'upload_traffic_with_unit': f"{self._rb_api.get_address_traffic_value(self._address, 'upload')} {self._rb_api.traffic_unit}",
-                        'upload_packets_with_unit': f"{self._rb_api.get_address_packet_value(self._address, 'upload')} P/s"}
-
-        return response
+            #return f'{self._rb_api.get_address_name(self._address)} {self._sensor_type.capitalize()}'
+            return f'{self._rb_api.get_address_name(self._address)}'
 
     @property
     def state(self):
@@ -133,14 +99,27 @@ class RouterBoardAddressSensor(Entity):
         return self._state
 
     @property
+    def unit_of_measurement(self):
+        if self._sensor_type == 'active':
+            return None
+        return self._rb_api.traffic_unit
+
+    @property
+    def device_state_attributes(self):
+        if self._sensor_type == 'active':
+            return None
+
+        if _is_address_a_network(self._address):
+            pps = self._rb_api.get_network_packet_value(self._address, self._sensor_type) or 0
+        else:
+            pps = self._rb_api.get_address_packet_value(self._address, self._sensor_type) or 0
+
+        return {'packets_per_second': pps}
+
+    @property
     def should_poll(self):
         """Return the polling requirement for this sensor."""
         return False
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement of this entity, if any."""
-        return self._rb_api.traffic_unit
 
     @property
     def available(self):
@@ -149,7 +128,19 @@ class RouterBoardAddressSensor(Entity):
 
     def update(self):
         """Get the latest data from RouterBooard API and updates the state."""
-        if _is_address_a_network(self._address):
-            self._state = self._rb_api.get_network_traffic_value(self._address, 'download')
-        else:
-            self._state = self._rb_api.get_address_traffic_value(self._address, 'download')
+        try:
+            if self._sensor_type == 'active':
+                if _is_address_a_network(self._address):
+                    self._state = len(self._rb_api.get_active_hosts_in_network(self._address))
+                else:
+                    self._state = STATE_ON if self._rb_api.host_is_active(self._address) else STATE_OFF
+            else:
+                if _is_address_a_network(self._address):
+                    self._state = self._rb_api.get_network_traffic_value(self._address, self._sensor_type) or 0
+                else:
+                    #val = self._rb_api.get_address_traffic_value(self._address, self._sensor_type)
+                    #self._state = val if val != None else -1
+
+                    self._state = self._rb_api.get_address_traffic_value(self._address, self._sensor_type)
+        except Exception as e:
+            _LOGGER.warning(f"Exception occurred while retrieving updating sensor [{self._sensor_type}][{self._address}] - {type(e)} {e.args}")

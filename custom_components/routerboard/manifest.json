@@ -3,7 +3,7 @@
   "name": "RouterBoard",
   "documentation": "",
   "requirements": [
-    "librouteros==2.2.0"
+    "librouteros"
   ],
   "dependencies": [],
   "codeowners": []
