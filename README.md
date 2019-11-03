@@ -47,10 +47,11 @@ States: On / Off
 - depends on status value of lease on dhcp-server - matching string 'bound'
 - I would recommend using lower lease time in dhcp server so offline devices will switch to 'Off' more precisely.
 
-![hostsensor][hostsensorimg]
-
 #### Network sensor
 State: Number of currently active hosts in network
-![networksensor][networksensorimg]
+
+#### Queue switch
+State: Queue enabled
+Attributes: Target, set bandwidth limit for queue
 
 
