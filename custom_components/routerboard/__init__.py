@@ -42,6 +42,7 @@ CONF_TRAFFIC_UNIT = 'traffic_unit'
 CONF_EXPAND_NETWORK_HOSTS = 'expand_network_hosts'
 CONF_MONITORED_TRAFFIC = 'monitored_traffic'
 CONF_MANAGE_QUEUES = 'manage_queues'
+CONF_TRACK_ENV_VARIABLES = 'track_env_variables'
 
 DEFAULT_TRAFFIC_UNIT = 'Mb/s'
 
@@ -58,6 +59,7 @@ try:
             vol.Optional(CONF_TRAFFIC_UNIT, default=DEFAULT_TRAFFIC_UNIT): vol.In(AVAILABLE_TRAFFIC_UNITS),
             vol.Optional(CONF_EXPAND_NETWORK_HOSTS, default=False): cv.boolean,
             vol.Optional(CONF_MONITORED_TRAFFIC, default=['active']): vol.All(cv.ensure_list, [vol.In(AVAILABLE_MONITORED_TRAFFIC)]),
+            vol.Optional(CONF_TRACK_ENV_VARIABLES, default=[]): vol.All(),
             vol.Optional(CONF_EXPAND_NETWORK_HOSTS, default=False): cv.boolean,
             vol.Optional(CONF_MONITORED_CONDITIONS, default=[]): vol.All(),
             vol.Optional(CONF_MANAGE_QUEUES, default=False): cv.boolean
@@ -78,6 +80,7 @@ def setup(hass, config):
     traffic_unit = config[DOMAIN][CONF_TRAFFIC_UNIT]
     expand_network_hosts = config[DOMAIN][CONF_EXPAND_NETWORK_HOSTS]
     manage_queues = config[DOMAIN][CONF_MANAGE_QUEUES]
+    track_env_variables = config[DOMAIN][CONF_TRACK_ENV_VARIABLES]
 
     _LOGGER.debug(f"""
     Configuration:
@@ -89,7 +92,8 @@ def setup(hass, config):
       Monitored conditions: {monitored_conditions},
       Traffic unit: {traffic_unit},
       Expand network hosts: {expand_network_hosts},
-      Manage queues: {manage_queues}""")
+      Manage queues: {manage_queues},
+      Track env variables: {track_env_variables}""")
 
     from librouteros.exceptions import ConnectionError, LoginError
 
@@ -126,7 +130,8 @@ def setup(hass, config):
         'conditions': config[DOMAIN][CONF_MONITORED_CONDITIONS],
         'client_name': config[DOMAIN][CONF_NAME],
         'expand_network': config[DOMAIN][CONF_EXPAND_NETWORK_HOSTS],
-        'mon_traffic': config[DOMAIN][CONF_MONITORED_TRAFFIC]}
+        'mon_traffic': config[DOMAIN][CONF_MONITORED_TRAFFIC],
+        'track_env_variables': config[DOMAIN][CONF_TRACK_ENV_VARIABLES]}
 
     discovery.load_platform(hass, 'sensor', DOMAIN, sensor_config, config)
 
@@ -159,6 +164,7 @@ class RouterBoardData:
         self._queues = {}
         self._last_run = 0  # Milliseconds
         self._last_interval = 0  # Seconds
+        self._variable_values = {}
 
         self.reconnect()
 
@@ -204,6 +210,9 @@ class RouterBoardData:
 
     def host_exists(self, host):
         return self._hosts.get(host) is not None
+
+    def get_variable_value(self, variable):
+        return self._variable_values.get(variable)
 
     @staticmethod
     def __current_milliseconds():
@@ -320,6 +329,19 @@ class RouterBoardData:
                 self.reconnect()
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
+
+        try:
+            environment = self._api(cmd="/system/script/environment/print")
+            for var in environment:
+                self._variable_values[var.get('name')] = var.get('value')
+
+        except Exception as ex1:
+            # self.available = False
+            _LOGGER.warning(f"Unable to retrieve environment - {type(ex1)} {ex1.args}")
+            try:
+                self.reconnect()
+            except Exception as er:
+                _LOGGER.warning(f"Error reconnecting API - {type(er)} {er.args}")
 
         dispatcher_send(self._hass, DATA_UPDATED)
 

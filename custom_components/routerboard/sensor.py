@@ -22,6 +22,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     client_name = discovery_info['client_name']
     expand_network_hosts = discovery_info['expand_network']
     monitored_traffic = discovery_info['mon_traffic']
+    track_env_variables = discovery_info['track_env_variables']
     _LOGGER.debug(f'Monitored traffic: {monitored_traffic}')
     # Filter monitored conditions, generate all valid addresses if network is supplied. Also monitor network
     monitored_addresses = []
@@ -54,7 +55,57 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         for traffic in monitored_traffic:
             dev.append(RouterBoardAddressSensor(hass, rb_api, client_name, host, traffic))
 
+    for var in track_env_variables:
+        _LOGGER.info(f"Adding variable sensor {var}")
+        dev.append(RouterBoardVariableSensor(hass, rb_api, client_name, var))
+
     async_add_entities(dev, True)
+
+
+class RouterBoardVariableSensor(Entity):
+    def __init__(self, hass, rb_api, client_name, variable):
+        """Initialize base sensor."""
+        self._rb_api = rb_api
+        self._client_name = client_name
+        self._variable = variable
+        self._state = None
+
+        entity_name = f'{self._client_name}_var__{self._variable}'
+
+        self.entity_id = async_generate_entity_id(ENTITY_ID_FORMAT, entity_name, hass=hass)
+
+    async def async_added_to_hass(self):
+        """Handle entity which will be added."""
+        async_dispatcher_connect(
+            self.hass, DATA_UPDATED, self._schedule_immediate_update)
+
+    @callback
+    def _schedule_immediate_update(self):
+        self.async_schedule_update_ha_state(True)
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return self._variable.capitalize()
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._state
+
+    @property
+    def should_poll(self):
+        """Return the polling requirement for this sensor."""
+        return False
+
+    @property
+    def available(self):
+        """Could the device be accessed during the last update call."""
+        return self._rb_api.available
+
+    def update(self):
+        """Get the latest data from RouterBooard API and updates the state."""
+        self._state = self._rb_api.get_variable_value(self._variable)
 
 
 class RouterBoardAddressSensor(Entity):
