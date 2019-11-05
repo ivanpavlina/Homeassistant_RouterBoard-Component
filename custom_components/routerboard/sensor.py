@@ -2,7 +2,7 @@
 import logging
 import ipaddress
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import callback
 from homeassistant.components.sensor import ENTITY_ID_FORMAT
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -105,7 +105,13 @@ class RouterBoardVariableSensor(Entity):
 
     def update(self):
         """Get the latest data from RouterBooard API and updates the state."""
-        self._state = self._rb_api.get_variable_value(self._variable)
+        val = str(self._rb_api.get_variable_value(self._variable)).lower()
+        if val in ('on', '1', 'true', 'yes'):
+            self._state = STATE_ON
+        elif val in ('off', '0', 'false', 'no'):
+            self._state = STATE_OFF
+        else:
+            self._state = STATE_UNKNOWN
 
 
 class RouterBoardAddressSensor(Entity):
