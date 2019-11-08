@@ -1,0 +1,6 @@
+run_script:
+  description: Run RouterBoard script
+  fields:
+    name:
+      description: RouterBoard script
+      example: "MyScript"

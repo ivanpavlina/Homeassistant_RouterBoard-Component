@@ -2,15 +2,16 @@
 import logging
 import ipaddress
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import callback
 from homeassistant.components.sensor import ENTITY_ID_FORMAT
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity, async_generate_entity_id
 
-from . import DATA_ROUTERBOARD, DATA_UPDATED, _is_address_a_network
+from . import DATA_ROUTERBOARD, DATA_UPDATED, CONST_SENSOR_NETWORK, CONST_SENSOR_CUSTOM, _is_address_a_network
 
 _LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Set up the RouterBoard sensors."""
@@ -18,46 +19,50 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         return
 
     rb_api = hass.data[DATA_ROUTERBOARD]
-    conditions = discovery_info['conditions']
     client_name = discovery_info['client_name']
-    expand_network_hosts = discovery_info['expand_network']
-    monitored_traffic = discovery_info['mon_traffic']
-    track_env_variables = discovery_info['track_env_variables']
-    _LOGGER.debug(f'Monitored traffic: {monitored_traffic}')
-    # Filter monitored conditions, generate all valid addresses if network is supplied. Also monitor network
-    monitored_addresses = []
 
-    for condition in conditions:
-        try:
-            if _is_address_a_network(condition):
-                _LOGGER.debug(f"Tracking requested network {condition}")
-                monitored_addresses.append(condition)
+    _LOGGER.info("Setting up RouterBoard sensor platform")
 
-                if expand_network_hosts:
-                    valid_hosts = rb_api.get_all_hosts_from_network(condition)
-                    _LOGGER.debug(f"Adding {len(valid_hosts)} hosts sensors due to requested network {condition} expansion")
-                    monitored_addresses.extend(rb_api.get_all_hosts_from_network(condition))
-            else:
-                if rb_api.host_exists(condition):
-                    _LOGGER.debug(f"Requested host {condition} found, tracking")
-                    monitored_addresses.append(condition)
+    if discovery_info['sensor_type'] is CONST_SENSOR_NETWORK:
+        requested_addresses = discovery_info['monitored_addresses']
+
+        expand_network_hosts = discovery_info['expand_network_hosts']
+        monitored_traffic = discovery_info['monitored_traffic']
+
+        # Filter monitored addresses, generate all valid hosts if network is supplied and expand_network_hosts is true.
+        # Also monitor network as a whole
+        monitored_addresses = []
+        for address in requested_addresses:
+            try:
+                if _is_address_a_network(address):
+                    _LOGGER.debug(f"Tracking requested network {address}")
+                    monitored_addresses.append(address)
+
+                    if expand_network_hosts:
+                        valid_hosts = rb_api.get_all_hosts_from_network(address)
+                        _LOGGER.debug(f"Adding {len(valid_hosts)} hosts sensors due to requested network {address} expansion")
+                        monitored_addresses.extend(rb_api.get_all_hosts_from_network(address))
                 else:
-                    _LOGGER.info(f"Requested host {condition} is not found in leases, will not track")
-        except ValueError:
-            _LOGGER.warning(f"Invalid address [{condition}] specified. "
-                            f"IPv4 address (192.168.1.1) or IPv4 network (192.168.1.0/24) supported only")
+                    if rb_api.host_exists(address):
+                        _LOGGER.debug(f"Requested host {address} found, tracking")
+                        monitored_addresses.append(address)
+                    else:
+                        _LOGGER.info(f"Requested host {address} is not found in leases, will not track")
+            except ValueError:
+                _LOGGER.warning(f"Invalid address [{address}] specified. "
+                                f"IPv4 address (192.168.1.1) or IPv4 network (192.168.1.0/24) supported only")
 
-    _LOGGER.info(f"Generating {len(monitored_addresses)} sensors")
-    _LOGGER.debug(f">>>{monitored_addresses}")
+        _LOGGER.info(f"Generating {len(monitored_addresses)} network sensors")
+        _LOGGER.debug(f">>>{monitored_addresses}")
 
-    dev = []
-    for host in monitored_addresses:
-        for traffic in monitored_traffic:
-            dev.append(RouterBoardAddressSensor(hass, rb_api, client_name, host, traffic))
-
-    for var in track_env_variables:
-        _LOGGER.info(f"Adding variable sensor {var}")
-        dev.append(RouterBoardVariableSensor(hass, rb_api, client_name, var))
+        dev = []
+        for address in monitored_addresses:
+            for traffic in monitored_traffic:
+                dev.append(RouterBoardAddressSensor(hass, rb_api, client_name, address, traffic))
+    # track_env_variables = discovery_info['track_env_variables']
+    # for var in track_env_variables:
+    #     _LOGGER.info(f"Adding variable sensor {var}")
+    #     dev.append(RouterBoardVariableSensor(hass, rb_api, client_name, var))
 
     async_add_entities(dev, True)
 
@@ -104,8 +109,16 @@ class RouterBoardVariableSensor(Entity):
         return self._rb_api.available
 
     def update(self):
+        _LOGGER.info("")
         """Get the latest data from RouterBooard API and updates the state."""
-        self._state = self._rb_api.get_variable_value(self._variable)
+        val = str(self._rb_api.get_variable_value(self._variable)).lower()
+        _LOGGER.info(f"Sensor value: {val}")
+        if val in ('on', '1', 'true', 'yes'):
+            self._state = STATE_ON
+        elif val in ('off', '0', 'false', 'no'):
+            self._state = STATE_OFF
+        else:
+            self._state = STATE_UNKNOWN
 
 
 class RouterBoardAddressSensor(Entity):
@@ -119,7 +132,7 @@ class RouterBoardAddressSensor(Entity):
         self._state = None
         self._sensor_type = sensor_type # Active, Download, Upload, Local, WAN(Download+Local)
 
-        is_network =  _is_address_a_network(self._address)
+        is_network = _is_address_a_network(self._address)
         name_type = {'net' if is_network else 'host'}
         name_suffix = ('active_hosts' if is_network else 'activity') if self._sensor_type == 'active' else self._sensor_type
         entity_name = f'{self._client_name}_{name_type}_{self._address}_{name_suffix}'

@@ -5,6 +5,7 @@ from homeassistant.core import callback
 from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchDevice
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import async_generate_entity_id
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
 
 from . import DATA_ROUTERBOARD, DATA_UPDATED
 
@@ -12,24 +13,46 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the RouterBoard Queues switches."""
-
+    """Set up the RouterBoard switches."""
     if discovery_info is None:
         return
 
-    _LOGGER.info("Setting up Routerboard switch platform")
+    _LOGGER.info("Setting up RouterBoard switch platform")
 
     rb_api = hass.data[DATA_ROUTERBOARD]
     client_name = discovery_info['client_name']
 
-    dev = []
-    monitored_queues = rb_api.get_queue_list()
-    _LOGGER.info(f"Generating {len(monitored_queues)} queue switches")
+    switches = []
 
-    for queue_id in monitored_queues:
-        dev.append(RouterBoardQueueSwitch(hass, rb_api, client_name, queue_id))
+    if discovery_info['manage_queues']:
+        monitored_queues = rb_api.get_queue_list()
+        _LOGGER.info(f"Generating {len(monitored_queues)} queue switches")
+        for queue_id in monitored_queues:
+            switches.append(RouterBoardQueueSwitch(hass, rb_api, client_name, queue_id))
 
-    async_add_entities(dev, True)
+    if discovery_info['custom_switches']:
+        for switch in discovery_info['custom_switches']:
+            try:
+                switch_name = switch['name']
+
+            except KeyError:
+                _LOGGER.warning("Missing 'name' in custom switch configuration!")
+                continue
+
+            try:
+                _LOGGER.info(f"Switch turn on action: {switch['turn_on']['cmd']}")
+                _LOGGER.info(f"Switch turn off action: {switch['turn_off']['cmd']}")
+                _LOGGER.info(f"Switch state action: {switch['state']['cmd']}")
+            except KeyError:
+                _LOGGER.warning(f"Invalid config for {switch_name}!")
+                continue
+
+            # Wont check for switch['state']['args'], these are optional
+
+            _LOGGER.info(f"Generating custom switch [{switch_name}]")
+            switches.append(RouterBoardCustomSwitch(hass, rb_api, client_name, switch))
+
+    async_add_entities(switches, True)
 
 
 class RouterBoardQueueSwitch(SwitchDevice):
@@ -88,3 +111,72 @@ class RouterBoardQueueSwitch(SwitchDevice):
         except Exception as e:
             _LOGGER.warning(
                 f"Exception occurred while retrieving updating queue state [{self._queue_id}] - {type(e)} {e.args}")
+
+
+class RouterBoardCustomSwitch(SwitchDevice):
+    """Base for a RouterBoard Queue Switch."""
+
+    def __init__(self, hass, rb_data, client_name, switch_data):
+        """Initialize switch."""
+        self._rb_data = rb_data
+        self._client_name = client_name
+        self._config = switch_data
+
+        self._state = None
+
+        entity_name = f"{self._client_name}_switch_{self._config.get('name')}"
+
+        self.entity_id = async_generate_entity_id(ENTITY_ID_FORMAT, entity_name, hass=hass)
+
+    async def async_added_to_hass(self):
+        """Handle entity which will be added."""
+        async_dispatcher_connect(
+            self.hass, DATA_UPDATED, self._schedule_immediate_update)
+
+    @callback
+    def _schedule_immediate_update(self):
+        self.async_schedule_update_ha_state(True)
+
+    @property
+    def is_on(self) -> bool:
+        return self._state
+
+    def turn_on(self, **kwargs) -> None:
+        self._rb_data.run_raw_command(self._config['turn_on']['cmd'], self._config['turn_on'].get('args'))
+        self._schedule_immediate_update()
+
+    def turn_off(self, **kwargs) -> None:
+        self._rb_data.run_raw_command(self._config['turn_off']['cmd'], self._config['turn_off'].get('args'))
+        self._schedule_immediate_update()
+
+    @property
+    def name(self):
+        """Return the name of the switch."""
+        # return f'{self._rb_api.get_queue_name(self._queue_id).split("@")[0]} Queue'
+        return f"{self._config['name']}"
+
+    # @property
+    # def device_state_attributes(self):
+    #     limits = self._rb_data.get_queue_limits(self._queue_id)
+    #     return {'target': ", ".join(self._rb_data.get_queue_target(self._queue_id).split(",")),
+    #             'download-limit': limits[1],
+    #             'upload-limit': limits[0]}
+
+    def update(self):
+        """Get the latest data from RouterBoard API and updates the state."""
+        try:
+            response = self._rb_data.run_raw_command(self._config['state']['cmd'], self._config['state'].get('args'))
+            state = STATE_UNKNOWN
+            for item in response:
+                if item.get('invalid') is False and item.get('disabled') is False:
+                    _LOGGER.info("STATE ON!")
+                    state = True
+                else:
+                    _LOGGER.info("STATE OFF!")
+                    state = False
+
+            self._state = state
+        except Exception as e:
+            _LOGGER.warning(f"Could not update custom switch {self._config['name']} >> {type(e)}  {e.args}")
+            self._state = None
+

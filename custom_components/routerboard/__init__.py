@@ -5,7 +5,7 @@ import ipaddress
 import voluptuous as vol
 
 from homeassistant.const import (
-    CONF_HOST, CONF_NAME, CONF_USERNAME, CONF_PASSWORD, CONF_PORT, CONF_SCAN_INTERVAL, CONF_MONITORED_CONDITIONS)
+    CONF_HOST, CONF_NAME, CONF_USERNAME, CONF_PASSWORD, CONF_PORT, CONF_SCAN_INTERVAL)
 from homeassistant.helpers import config_validation as cv, discovery
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import track_time_interval
@@ -26,6 +26,9 @@ def _is_address_a_network(address):
             raise
 
 
+CONST_SENSOR_CUSTOM = 1
+CONST_SENSOR_NETWORK = 2
+
 DOMAIN = 'routerboard'
 DATA_UPDATED = 'routerboard_data_updated'
 DATA_ROUTERBOARD = 'data_routerboard'
@@ -40,13 +43,21 @@ AVAILABLE_MONITORED_TRAFFIC = ['active', 'download', 'upload', 'local', 'wan']
 
 CONF_TRAFFIC_UNIT = 'traffic_unit'
 CONF_EXPAND_NETWORK_HOSTS = 'expand_network_hosts'
+CONF_MONITORED_ADDRESSES = 'monitored_addresses'
 CONF_MONITORED_TRAFFIC = 'monitored_traffic'
 CONF_MANAGE_QUEUES = 'manage_queues'
-CONF_TRACK_ENV_VARIABLES = 'track_env_variables'
+CONF_CUSTOM_SWITCHES = 'custom_switches'
 
 DEFAULT_TRAFFIC_UNIT = 'Mb/s'
 
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
+
+SERVICE_COMMAND_NAME = "run_script"
+
+SERVICE_SCHEMA = vol.Schema({
+    vol.Required(CONF_NAME): cv.string
+})
+
 try:
     CONFIG_SCHEMA = vol.Schema({
         DOMAIN: vol.Schema({
@@ -59,10 +70,10 @@ try:
             vol.Optional(CONF_TRAFFIC_UNIT, default=DEFAULT_TRAFFIC_UNIT): vol.In(AVAILABLE_TRAFFIC_UNITS),
             vol.Optional(CONF_EXPAND_NETWORK_HOSTS, default=False): cv.boolean,
             vol.Optional(CONF_MONITORED_TRAFFIC, default=['active']): vol.All(cv.ensure_list, [vol.In(AVAILABLE_MONITORED_TRAFFIC)]),
-            vol.Optional(CONF_TRACK_ENV_VARIABLES, default=[]): vol.All(),
             vol.Optional(CONF_EXPAND_NETWORK_HOSTS, default=False): cv.boolean,
-            vol.Optional(CONF_MONITORED_CONDITIONS, default=[]): vol.All(),
-            vol.Optional(CONF_MANAGE_QUEUES, default=False): cv.boolean
+            vol.Optional(CONF_MONITORED_ADDRESSES, default=[]): vol.All(),
+            vol.Optional(CONF_MANAGE_QUEUES, default=False): cv.boolean,
+            vol.Optional(CONF_CUSTOM_SWITCHES, default=[]): vol.All()
         })
     }, extra=vol.ALLOW_EXTRA)
 except Exception as e:
@@ -76,32 +87,16 @@ def setup(hass, config):
     password = config[DOMAIN].get(CONF_PASSWORD)
     port = config[DOMAIN][CONF_PORT]
     scan_interval = config[DOMAIN][CONF_SCAN_INTERVAL]
-    monitored_conditions = config[DOMAIN][CONF_MONITORED_CONDITIONS]
+    monitored_addresses = config[DOMAIN][CONF_MONITORED_ADDRESSES]
     traffic_unit = config[DOMAIN][CONF_TRAFFIC_UNIT]
     expand_network_hosts = config[DOMAIN][CONF_EXPAND_NETWORK_HOSTS]
     manage_queues = config[DOMAIN][CONF_MANAGE_QUEUES]
-    track_env_variables = config[DOMAIN][CONF_TRACK_ENV_VARIABLES]
-
-    _LOGGER.debug(f"""
-    Configuration:
-      Host: {host},
-      Username: {username},
-      Password: {password},
-      Port: {port},
-      Scan interval: {scan_interval},
-      Monitored conditions: {monitored_conditions},
-      Traffic unit: {traffic_unit},
-      Expand network hosts: {expand_network_hosts},
-      Manage queues: {manage_queues},
-      Track env variables: {track_env_variables}""")
+    custom_switches = config[DOMAIN][CONF_CUSTOM_SWITCHES]
 
     from librouteros.exceptions import ConnectionError, LoginError
 
     try:
-
         rb_data = hass.data[DATA_ROUTERBOARD] = RouterBoardData(hass, host, port, username, password, traffic_unit)
-        # Returns None if auth fails (could be wrong)
-
         _LOGGER.info("Connected to API")
     except ConnectionError:
         _LOGGER.error("Could not establish connection to RouterBoard API")
@@ -109,6 +104,7 @@ def setup(hass, config):
     except LoginError:
         _LOGGER.error("Invalid credentials")
         return False
+    # TODO ovaj exception loviti u sensoru, ne tu
     except LookupError:
         _LOGGER.error("Accounting not active in RouterBoard, "
                       "please enable it and restart HomeAssistant "
@@ -124,20 +120,28 @@ def setup(hass, config):
         """Get the latest data from RouterBoard."""
         rb_data.update()
 
+    def run_script(call):
+        return rb_data.run_script(call.data.get(CONF_NAME))
+
+    hass.services.register(DOMAIN, SERVICE_COMMAND_NAME, run_script, schema=SERVICE_SCHEMA)
+
     track_time_interval(hass, refresh, scan_interval)
 
     sensor_config = {
-        'conditions': config[DOMAIN][CONF_MONITORED_CONDITIONS],
+        'sensor_type': CONST_SENSOR_NETWORK,
         'client_name': config[DOMAIN][CONF_NAME],
-        'expand_network': config[DOMAIN][CONF_EXPAND_NETWORK_HOSTS],
-        'mon_traffic': config[DOMAIN][CONF_MONITORED_TRAFFIC],
-        'track_env_variables': config[DOMAIN][CONF_TRACK_ENV_VARIABLES]}
+        'monitored_addresses': config[DOMAIN][CONF_MONITORED_ADDRESSES],
+        'monitored_traffic': config[DOMAIN][CONF_MONITORED_TRAFFIC],
+        'expand_network_hosts': config[DOMAIN][CONF_EXPAND_NETWORK_HOSTS]
+    }
 
     discovery.load_platform(hass, 'sensor', DOMAIN, sensor_config, config)
 
-    if config[DOMAIN][CONF_MANAGE_QUEUES]:
+    if config[DOMAIN][CONF_MANAGE_QUEUES] or config[DOMAIN][CONF_CUSTOM_SWITCHES]:
         switch_config = {
-            'client_name': config[DOMAIN][CONF_NAME]
+            'client_name': config[DOMAIN][CONF_NAME],
+            'manage_queues': config[DOMAIN][CONF_MANAGE_QUEUES],
+            'custom_switches': config[DOMAIN][CONF_CUSTOM_SWITCHES]
         }
         discovery.load_platform(hass, 'switch', DOMAIN, switch_config, config)
 
@@ -150,13 +154,11 @@ class RouterBoardData:
     def __init__(self, hass, host, port, username, password, traffic_unit):
         """Initialize the data handler."""
         self._hass = hass
-        self._host = host
-        self._port = port
-        self._username = username
-        self._password = password
+
         self.traffic_unit = traffic_unit
 
-        self._api = None
+        self._api = RouterBoardApi(host, port, username, password)
+
         self._local_networks = []
         self._hosts = {}
         self._latest_bytes_count = {}
@@ -165,11 +167,12 @@ class RouterBoardData:
         self._last_run = 0  # Milliseconds
         self._last_interval = 0  # Seconds
         self._variable_values = {}
+        self._available_scripts = {}
 
-        self.reconnect()
-
+        self._api.reconnect()
         self.available = True
 
+        # TODO ne tu, u sensor
         if not self._is_ip_accounting_enabled():
             raise LookupError
 
@@ -177,14 +180,19 @@ class RouterBoardData:
         # Hit snapshot on init to clear previous accounting data
         self._take_accounting_snapshot()
 
-    def reconnect(self):
-        from librouteros import connect
-        from librouteros.login import login_plain
+        self.init_scripts()
 
-        self._api = connect(host=self._host, port=self._port, username=self._username, password=self._password, login_methods=(login_plain, ))
+    def run_raw_command(self, command, args):
+        return self._api.run_raw_command(command, args)
+
+
+    def run_script(self, script_name):
+        script = self._available_scripts.get(script_name)
+        params = {'.id': script.get('.id')}
+        self._api.run_command('/system/script/run', **params)
 
     def _is_ip_accounting_enabled(self):
-        return self._api(cmd="/ip/accounting/print")[0].get('enabled')
+        return self._api.run_command("/ip/accounting/print")[0].get('enabled')
 
     def get_queue_list(self):
         return self._queues.keys()
@@ -203,7 +211,7 @@ class RouterBoardData:
 
     def set_queue_state(self, queue_id, state):
         params = {'.id': queue_id, 'disabled': not state}
-        self._api(cmd="/queue/simple/set", **params)
+        self._api.run_command("/queue/simple/set", **params)
 
     def get_all_hosts_from_network(self, network):
         return [x for x in self._hosts.keys() if ipaddress.IPv4Address(x) in ipaddress.IPv4Network(network)]
@@ -227,15 +235,20 @@ class RouterBoardData:
 
     def _take_accounting_snapshot(self):
         # Takes snapshot of all captured packets and keeps timing of snapshots
-        self._api(cmd="/ip/accounting/snapshot/take")
+        self._api.run_command("/ip/accounting/snapshot/take")
         current_time = self.__current_milliseconds()
         interval = current_time - self._last_run
         self._last_run = current_time
         self._last_interval = interval / 1000
         _LOGGER.debug(f"Time between snapshots is {self._last_interval} seconds")
 
+    def init_scripts(self):
+        for script in self._api.run_command('/system/script/print'):
+            self._available_scripts[script.get('name')] = script
+            _LOGGER.info(f"Initialized script {script.get('name')}")
+
     def init_local_networks(self):
-        dhcp_networks = self._api(cmd="/ip/dhcp-server/network/print")
+        dhcp_networks = self._api.run_command("/ip/dhcp-server/network/print")
         self._local_networks = [ipaddress.IPv4Network(network.get('address')) for network in dhcp_networks]
 
     def _reset_byte_and_packet_counters(self):
@@ -265,7 +278,7 @@ class RouterBoardData:
 
         try:
             # Get all hosts from DHCP leases, build host dict and collapse all addresses to common network
-            dhcp_leases = self._api(cmd="/ip/dhcp-server/lease/print")
+            dhcp_leases = self._api.run_command("/ip/dhcp-server/lease/print")
 
             self._hosts = {lease.get('address'): lease for lease in dhcp_leases}
             _LOGGER.debug(f"Retrieved {len(self._hosts)} hosts")
@@ -274,14 +287,14 @@ class RouterBoardData:
             #self.available = False
             _LOGGER.warning(f"Unable to retrieve hosts from dhcp leases - {type(e)} {e.args}")
             try:
-                self.reconnect()
+                self._api.reconnect()
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
         try:
             # Take accounting snapshot and retrieve the data
             self._take_accounting_snapshot()
-            traffic_list = self._api(cmd="/ip/accounting/snapshot/print")
+            traffic_list = self._api.run_command("/ip/accounting/snapshot/print")
 
             self._reset_byte_and_packet_counters()
 
@@ -312,13 +325,13 @@ class RouterBoardData:
             #self.available = False
             _LOGGER.warning(f"Unable to retrieve accounting data - {type(e)} {e.args}")
             try:
-                self.reconnect()
+                self._api.reconnect()
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
         try:
             # Get all queues
-            queues = self._api(cmd="/queue/simple/print")
+            queues = self._api.run_command("/queue/simple/print")
             self._queues = {queue.get('.id'): queue for queue in queues}
             _LOGGER.debug(f"Retrieved {len(self._queues)} queues")
             # self.available = True
@@ -326,12 +339,12 @@ class RouterBoardData:
             # self.available = False
             _LOGGER.warning(f"Unable to retrieve queues - {type(ex)} {ex.args}")
             try:
-                self.reconnect()
+                self._api.reconnect()
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
         try:
-            environment = self._api(cmd="/system/script/environment/print")
+            environment = self._api.run_command("/system/script/environment/print")
             for var in environment:
                 self._variable_values[var.get('name')] = var.get('value')
 
@@ -339,7 +352,7 @@ class RouterBoardData:
             # self.available = False
             _LOGGER.warning(f"Unable to retrieve environment - {type(ex1)} {ex1.args}")
             try:
-                self.reconnect()
+                self._api.reconnect()
             except Exception as er:
                 _LOGGER.warning(f"Error reconnecting API - {type(er)} {er.args}")
 
@@ -437,3 +450,25 @@ class RouterBoardData:
             return round(value / self._last_interval)
         except:
             return 0
+
+
+class RouterBoardApi:
+    def __init__(self, host, port, username, password):
+        self._host = host
+        self._port = port
+        self._username = username
+        self._password = password
+        self._api = None
+
+    def reconnect(self):
+        from librouteros import connect
+        from librouteros.login import login_plain
+
+        self._api = connect(host=self._host, port=self._port, username=self._username, password=self._password, login_methods=(login_plain, ))
+
+    def run_command(self, command, **params):
+        return self._api(cmd=command, **params)
+
+    def run_raw_command(self, command, args):
+        _LOGGER.info(f"API RUNNING RAW COMMAND: {command} > {args}")
+        return self._api.rawCmd(command, args)
