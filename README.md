@@ -69,3 +69,11 @@ Attributes: Target, set bandwidth limit for queue
 #### Custom switch
 Required objects : `turn_on`, `turn_off`, `state`
 Every object has to contain `cmd` and `args` objects which will be executed on mikrotik API.
+
+#### Services
+Service name : `routerboard.run_script`
+Runs predefined mikrotik script
+
+Parameter | Description | Example
+name | RouterBoard | MyScript
+

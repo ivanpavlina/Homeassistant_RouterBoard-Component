@@ -26,8 +26,7 @@ def _is_address_a_network(address):
             raise
 
 
-CONST_SENSOR_CUSTOM = 1
-CONST_SENSOR_NETWORK = 2
+CONST_SENSOR_NETWORK = 1
 
 DOMAIN = 'routerboard'
 DATA_UPDATED = 'routerboard_data_updated'
@@ -166,7 +165,6 @@ class RouterBoardData:
         self._queues = {}
         self._last_run = 0  # Milliseconds
         self._last_interval = 0  # Seconds
-        self._variable_values = {}
         self._available_scripts = {}
 
         self._api.reconnect()
@@ -184,7 +182,6 @@ class RouterBoardData:
 
     def run_raw_command(self, command, args):
         return self._api.run_raw_command(command, args)
-
 
     def run_script(self, script_name):
         script = self._available_scripts.get(script_name)
@@ -218,9 +215,6 @@ class RouterBoardData:
 
     def host_exists(self, host):
         return self._hosts.get(host) is not None
-
-    def get_variable_value(self, variable):
-        return self._variable_values.get(variable)
 
     @staticmethod
     def __current_milliseconds():
@@ -273,9 +267,9 @@ class RouterBoardData:
             else:
                 self._latest_packets_count[local_ip][traffic_type] += packets_count
 
-    def update(self):
+    def update(self, last_run_failed=False):
         """Get the latest data from Routerboard instance."""
-
+        # Use "last_run_failed" to stop reconnecting if something fails two times in a row
         try:
             # Get all hosts from DHCP leases, build host dict and collapse all addresses to common network
             dhcp_leases = self._api.run_command("/ip/dhcp-server/lease/print")
@@ -288,6 +282,8 @@ class RouterBoardData:
             _LOGGER.warning(f"Unable to retrieve hosts from dhcp leases - {type(e)} {e.args}")
             try:
                 self._api.reconnect()
+                self.update(True)
+                return
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
@@ -326,6 +322,8 @@ class RouterBoardData:
             _LOGGER.warning(f"Unable to retrieve accounting data - {type(e)} {e.args}")
             try:
                 self._api.reconnect()
+                self.update(True)
+                return
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
@@ -342,19 +340,6 @@ class RouterBoardData:
                 self._api.reconnect()
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
-
-        try:
-            environment = self._api.run_command("/system/script/environment/print")
-            for var in environment:
-                self._variable_values[var.get('name')] = var.get('value')
-
-        except Exception as ex1:
-            # self.available = False
-            _LOGGER.warning(f"Unable to retrieve environment - {type(ex1)} {ex1.args}")
-            try:
-                self._api.reconnect()
-            except Exception as er:
-                _LOGGER.warning(f"Error reconnecting API - {type(er)} {er.args}")
 
         dispatcher_send(self._hass, DATA_UPDATED)
 
@@ -414,13 +399,6 @@ class RouterBoardData:
             except:
                 return 0
         return -1
-        #bytes_per_second = round(self._latest_bytes_count[address][traffic_type] / self._last_interval)
-        #return self._convert_bytes_to_requested_unit(bytes_per_second)
-        #try:
-        #    bytes_per_second = round(self._latest_bytes_count[address][traffic_type] / self._last_interval)
-        #    return self._convert_bytes_to_requested_unit(bytes_per_second)
-        #except:
-        #    return 0
 
     def get_address_packet_value(self, address, traffic_type):
         try:
@@ -470,5 +448,4 @@ class RouterBoardApi:
         return self._api(cmd=command, **params)
 
     def run_raw_command(self, command, args):
-        _LOGGER.info(f"API RUNNING RAW COMMAND: {command} > {args}")
         return self._api.rawCmd(command, args)

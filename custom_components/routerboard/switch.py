@@ -5,7 +5,7 @@ from homeassistant.core import callback
 from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchDevice
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import async_generate_entity_id
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
+from homeassistant.const import STATE_UNKNOWN, STATE_ON, STATE_OFF
 
 from . import DATA_ROUTERBOARD, DATA_UPDATED
 
@@ -64,7 +64,9 @@ class RouterBoardQueueSwitch(SwitchDevice):
         self._client_name = client_name
         self._queue_id = queue_id
 
+        self._name = None
         self._state = None
+        self._attributes = {}
 
         entity_name = f'{self._client_name}_queue_{self._rb_api.get_queue_target(self._queue_id)}_{self._queue_id}'
 
@@ -84,25 +86,29 @@ class RouterBoardQueueSwitch(SwitchDevice):
         return self._state
 
     def turn_on(self, **kwargs) -> None:
-        self._rb_api.set_queue_state(self._queue_id, True)
-        self._schedule_immediate_update()
+        try:
+            self._rb_api.set_queue_state(self._queue_id, True)
+            self._schedule_immediate_update()
+        except Exception as e:
+            _LOGGER.warning(
+                f"Exception occurred while turning queue on [{self._queue_id}] - {type(e)} {e.args}")
 
     def turn_off(self, **kwargs) -> None:
-        self._rb_api.set_queue_state(self._queue_id, False)
-        self._schedule_immediate_update()
+        try:
+            self._rb_api.set_queue_state(self._queue_id, False)
+            self._schedule_immediate_update()
+        except Exception as e:
+            _LOGGER.warning(
+                f"Exception occurred while turning queue off [{self._queue_id}] - {type(e)} {e.args}")
 
     @property
     def name(self):
         """Return the name of the switch."""
-        #return f'{self._rb_api.get_queue_name(self._queue_id).split("@")[0]} Queue'
-        return f'{self._rb_api.get_queue_name(self._queue_id)}'
+        return self._name
 
     @property
     def device_state_attributes(self):
-        limits = self._rb_api.get_queue_limits(self._queue_id)
-        return {'target': ", ".join(self._rb_api.get_queue_target(self._queue_id).split(",")),
-                'download-limit': limits[1],
-                'upload-limit': limits[0]}
+        return self._attributes
 
     def update(self):
         """Get the latest data from RouterBoard API and updates the state."""
@@ -112,9 +118,24 @@ class RouterBoardQueueSwitch(SwitchDevice):
             _LOGGER.warning(
                 f"Exception occurred while retrieving updating queue state [{self._queue_id}] - {type(e)} {e.args}")
 
+        try:
+            limits = self._rb_api.get_queue_limits(self._queue_id)
+            self._attributes = {'target': ", ".join(self._rb_api.get_queue_target(self._queue_id).split(",")),
+                                'download-limit': limits[1],
+                                'upload-limit': limits[0]}
+        except Exception as e:
+            _LOGGER.warning(
+                f"Exception occurred while retrieving updating queue attributes [{self._queue_id}] - {type(e)} {e.args}")
+
+        try:
+            self._name = f'{self._rb_api.get_queue_name(self._queue_id)}'
+        except Exception as e:
+            _LOGGER.warning(
+                f"Exception occurred while retrieving updating queue name [{self._queue_id}] - {type(e)} {e.args}")
+
 
 class RouterBoardCustomSwitch(SwitchDevice):
-    """Base for a RouterBoard Queue Switch."""
+    """Base for a RouterBoard Custom Switch."""
 
     def __init__(self, hass, rb_data, client_name, switch_data):
         """Initialize switch."""
@@ -122,6 +143,7 @@ class RouterBoardCustomSwitch(SwitchDevice):
         self._client_name = client_name
         self._config = switch_data
 
+        self._name = f"{self._config['name']}"
         self._state = None
 
         entity_name = f"{self._client_name}_switch_{self._config.get('name')}"
@@ -142,25 +164,23 @@ class RouterBoardCustomSwitch(SwitchDevice):
         return self._state
 
     def turn_on(self, **kwargs) -> None:
-        self._rb_data.run_raw_command(self._config['turn_on']['cmd'], self._config['turn_on'].get('args'))
-        self._schedule_immediate_update()
+        try:
+            self._rb_data.run_raw_command(self._config['turn_on']['cmd'], self._config['turn_on'].get('args'))
+            self._schedule_immediate_update()
+        except Exception as e:
+            _LOGGER.warning(f"Could not turn on custom switch {self._config['name']} >> {type(e)}  {e.args}")
 
     def turn_off(self, **kwargs) -> None:
-        self._rb_data.run_raw_command(self._config['turn_off']['cmd'], self._config['turn_off'].get('args'))
-        self._schedule_immediate_update()
+        try:
+            self._rb_data.run_raw_command(self._config['turn_off']['cmd'], self._config['turn_off'].get('args'))
+            self._schedule_immediate_update()
+        except Exception as e:
+            _LOGGER.warning(f"Could not turn off custom switch {self._config['name']} >> {type(e)}  {e.args}")
 
     @property
     def name(self):
         """Return the name of the switch."""
-        # return f'{self._rb_api.get_queue_name(self._queue_id).split("@")[0]} Queue'
-        return f"{self._config['name']}"
-
-    # @property
-    # def device_state_attributes(self):
-    #     limits = self._rb_data.get_queue_limits(self._queue_id)
-    #     return {'target': ", ".join(self._rb_data.get_queue_target(self._queue_id).split(",")),
-    #             'download-limit': limits[1],
-    #             'upload-limit': limits[0]}
+        return self._name
 
     def update(self):
         """Get the latest data from RouterBoard API and updates the state."""
@@ -169,14 +189,12 @@ class RouterBoardCustomSwitch(SwitchDevice):
             state = STATE_UNKNOWN
             for item in response:
                 if item.get('invalid') is False and item.get('disabled') is False:
-                    _LOGGER.info("STATE ON!")
-                    state = True
+                    state = STATE_ON
                 else:
-                    _LOGGER.info("STATE OFF!")
-                    state = False
+                    state = STATE_OFF
 
             self._state = state
         except Exception as e:
             _LOGGER.warning(f"Could not update custom switch {self._config['name']} >> {type(e)}  {e.args}")
-            self._state = None
+            self._state = STATE_UNKNOWN
 
