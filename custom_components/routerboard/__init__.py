@@ -282,7 +282,8 @@ class RouterBoardData:
             _LOGGER.warning(f"Unable to retrieve hosts from dhcp leases - {type(e)} {e.args}")
             try:
                 self._api.reconnect()
-                self.update(True)
+                if not last_run_failed:
+                    self.update(True)
                 return
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
@@ -322,7 +323,8 @@ class RouterBoardData:
             _LOGGER.warning(f"Unable to retrieve accounting data - {type(e)} {e.args}")
             try:
                 self._api.reconnect()
-                self.update(True)
+                if not last_run_failed:
+                    self.update(True)
                 return
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
@@ -338,6 +340,9 @@ class RouterBoardData:
             _LOGGER.warning(f"Unable to retrieve queues - {type(ex)} {ex.args}")
             try:
                 self._api.reconnect()
+                if not last_run_failed:
+                    self.update(True)
+                return
             except Exception as e:
                 _LOGGER.warning(f"Error reconnecting API - {type(e)} {e.args}")
 
