@@ -1,5 +1,7 @@
 """RouterBoard client API."""
 from datetime import timedelta
+from time import sleep
+
 import logging
 import ipaddress
 import voluptuous as vol
@@ -397,13 +399,13 @@ class RouterBoardData:
             return False
 
     def get_address_traffic_value(self, address, traffic_type):
-        if self.host_is_active(address):
-            try:
-                bytes_per_second = round(self._latest_bytes_count[address][traffic_type] / self._last_interval)
-                return self._convert_bytes_to_requested_unit(bytes_per_second)
-            except:
-                return 0
-        return -1
+        #if self.host_is_active(address):
+        try:
+            bytes_per_second = round(self._latest_bytes_count[address][traffic_type] / self._last_interval)
+            return self._convert_bytes_to_requested_unit(bytes_per_second)
+        except:
+            return 0
+        #return -1
 
     def get_address_packet_value(self, address, traffic_type):
         try:
@@ -442,6 +444,7 @@ class RouterBoardApi:
         self._username = username
         self._password = password
         self._api = None
+        self._command_running = False
 
     def reconnect(self):
         from librouteros import connect
@@ -450,7 +453,33 @@ class RouterBoardApi:
         self._api = connect(host=self._host, port=self._port, username=self._username, password=self._password, login_methods=(login_plain, ))
 
     def run_command(self, command, **params):
-        return self._api(cmd=command, **params)
+        tries = 0
+        while self._command_running:
+            _LOGGER.info("Backing off...")
+            sleep(0.2)
+            tries += 1
+            if tries > 5:
+                _LOGGER.info("Giving up...")
+                return None
+
+        self._command_running = True
+        res = self._api(cmd=command, **params)
+        self._command_running = False
+        return res
+
 
     def run_raw_command(self, command, args):
-        return self._api.rawCmd(command, args)
+        tries = 0
+        while self._command_running:
+            _LOGGER.info("Backing off...")
+            sleep(0.2)
+            tries += 1
+            if tries > 5:
+                _LOGGER.info("Giving up...")
+                return None
+
+
+        self._command_running = True
+        res = self._api.rawCmd(command, args)
+        self._command_running = False
+        return res
