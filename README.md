@@ -1,3 +1,6 @@
+### DEPRECATED
+Replaced with https://github.com/tomaae/homeassistant-mikrotik_router/issues
+
 # Homeassistant_RouterBoard-Component
 Custom RouterBoard component for Homeassistant
 
